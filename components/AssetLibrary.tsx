@@ -11,6 +11,7 @@ import {
   UploadCloudIcon,
   XMarkIcon,
   ClipboardDocumentIcon,
+  DownloadIcon,
 } from './icons';
 
 interface AssetLibraryProps {
@@ -32,7 +33,7 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
   isAnalyzing,
   hasScript,
 }) => {
-  const [allCopied, setAllCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   
   // State for manual entry
   const [addingAssetType, setAddingAssetType] = useState<AssetType | null>(null);
@@ -83,16 +84,26 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
     }
   };
 
-  const handleCopyAllAssets = () => {
+  const handleDownloadManifest = () => {
     if (assets.length === 0) return;
+    setDownloading(true);
     
-    const text = assets.map(a => 
-      `[${a.type.toUpperCase()}]\nName: ${a.name}\nDescription: ${a.description}`
-    ).join('\n\n');
+    const manifest = assets.map(a => ({
+      id: a.id,
+      type: a.type,
+      name: a.name,
+      description: a.description,
+      has_image: !!a.image
+    }));
 
-    navigator.clipboard.writeText(text);
-    setAllCopied(true);
-    setTimeout(() => setAllCopied(false), 2000);
+    const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `asset_manifest_${Date.now()}.json`;
+    link.click();
+    
+    setTimeout(() => setDownloading(false), 2000);
   };
 
   const sections: {type: AssetType, label: string}[] = [
@@ -119,11 +130,11 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
             </div>
             <button
                 type="button"
-                onClick={handleCopyAllAssets}
-                disabled={assets.length === 0}
-                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-30 text-gray-400 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center gap-2">
-                {allCopied ? <CheckCircle2Icon className="w-4 h-4 text-green-400" /> : <ClipboardDocumentIcon className="w-4 h-4" />}
-                Export Metadata
+                onClick={handleDownloadManifest}
+                disabled={assets.length === 0 || downloading}
+                className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest ${downloading ? 'bg-green-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-400 disabled:opacity-30'}`}>
+                {downloading ? <CheckCircle2Icon className="w-4 h-4" /> : <DownloadIcon className="w-4 h-4" />}
+                {downloading ? 'Manifest Saved' : 'Download Manifest'}
             </button>
         </div>
 

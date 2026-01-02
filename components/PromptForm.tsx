@@ -151,7 +151,7 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
         </div>
       </section>
 
-      {/* Visual Identity (Section 02) - NOW MORE PROMINENT */}
+      {/* Visual Identity (Section 02) */}
       <section className="animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-200">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
               <div className="flex items-center gap-3">
@@ -163,13 +163,14 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
                   onClick={() => projectFileInputRef.current?.click()}
                   className="flex-1 md:flex-none px-4 py-2 bg-gray-900 border border-gray-800 rounded-xl text-[10px] font-black uppercase text-gray-400 hover:text-white transition-all flex items-center justify-center gap-2"
                 >
-                    <RectangleStackIcon className="w-4 h-4" /> Ingest Archive
+                    <RectangleStackIcon className="w-4 h-4" /> Load Workspace
                 </button>
                 <button 
                   onClick={() => archiveFileInputRef.current?.click()}
                   className="flex-1 md:flex-none px-4 py-2 bg-indigo-950/30 border border-indigo-500/30 rounded-xl text-[10px] font-black uppercase text-indigo-400 hover:bg-indigo-900/40 hover:text-white transition-all flex items-center justify-center gap-2"
+                  title="Ingest local project JSON directly into GCS Vault"
                 >
-                    <UploadCloudIcon className="w-4 h-4" /> Cloud Archive
+                    <UploadCloudIcon className="w-4 h-4" /> Vault Ingest
                 </button>
               </div>
               <input type="file" ref={projectFileInputRef} onChange={(e) => handleProjectFileChange(e, onLoadProject)} accept=".json" className="hidden" />

@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -58,10 +57,11 @@ interface ShotCardProps {
   onRemoveAdHocAsset: (shotId: string, index: number) => void;
   onApproveShot: (shotId: string, approved: boolean) => void;
   isProcessing: boolean;
+  projectName: string | null;
 }
 
 const ShotCard: React.FC<ShotCardProps> = ({
-  shot, onUpdateShot, onGenerateSpecificKeyframe, onRefineShot, allAssets, onToggleAssetForShot, onGenerateVideo, onExtendVeoVideo, onUploadAdHocAsset, onRemoveAdHocAsset, onApproveShot, isProcessing
+  shot, onUpdateShot, onGenerateSpecificKeyframe, onRefineShot, allAssets, onToggleAssetForShot, onGenerateVideo, onExtendVeoVideo, onUploadAdHocAsset, onRemoveAdHocAsset, onApproveShot, isProcessing, projectName
 }) => {
   const [editedJson, setEditedJson] = useState('');
   const [referenceUrl, setReferenceUrl] = useState(shot.veoReferenceUrl || '');
@@ -128,6 +128,15 @@ const ShotCard: React.FC<ShotCardProps> = ({
           <p className="text-xs text-gray-400 font-mono mb-2">{shot.sceneName?.toUpperCase()}</p>
           <p className="text-sm p-3 rounded-lg bg-black/40 border border-gray-700/50 text-gray-300 italic">"{shot.pitch}"</p>
           
+          {/* Vault Path display */}
+          <div className="mt-4 p-2 bg-black/60 rounded border border-gray-800 flex items-center gap-2 group/vault">
+              <UploadCloudIcon className="w-3 h-3 text-indigo-500 opacity-50" />
+              <div className="flex-1 overflow-hidden">
+                  <span className="text-[8px] font-mono text-gray-600 block uppercase tracking-widest">Vault Remote Path</span>
+                  <span className="text-[9px] font-mono text-gray-400 truncate block">projects/{projectName || '...'}/units/{shot.id}/</span>
+              </div>
+          </div>
+
           {/* Asset Section */}
           <div className="mt-4">
               <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-2">Guidance Ingredients</p>
@@ -301,7 +310,9 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
               )}
           </div>
           
-          <button onClick={onCloudSync} disabled={!gcpToken} className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 text-white text-xs font-black uppercase italic tracking-tighter rounded-xl transition-all shadow-lg shadow-indigo-600/20 flex items-center gap-2"><SaveIcon className="w-4 h-4" /> Sync to Vault</button>
+          <button onClick={onCloudSync} disabled={!gcpToken || isProcessing} className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 text-white text-xs font-black uppercase italic tracking-tighter rounded-xl transition-all shadow-lg shadow-indigo-600/20 flex items-center gap-2">
+            <SaveIcon className="w-4 h-4" /> {isProcessing ? 'Syncing...' : 'Sync to Vault'}
+          </button>
           <button onClick={onExportPackage} className="px-5 py-3 bg-gray-800 hover:bg-gray-700 text-white text-xs font-black uppercase italic tracking-tighter rounded-xl border border-gray-700 flex items-center gap-2"><RectangleStackIcon className="w-4 h-4" /> Package</button>
           <button onClick={onNewProject} className="px-5 py-3 bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs font-black uppercase italic tracking-tighter rounded-xl border border-gray-700">Abort</button>
         </div>
@@ -331,6 +342,7 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
                     onRemoveAdHocAsset={onRemoveAdHocAsset} 
                     onApproveShot={onApproveShot}
                     isProcessing={isProcessing}
+                    projectName={projectName}
                   />
                 ))}
               </div>

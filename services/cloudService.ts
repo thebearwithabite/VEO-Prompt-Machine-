@@ -8,9 +8,9 @@
  * Implements persistent auth via Service Account JSON stored in Secret Manager.
  */
 
-export const DEFAULT_PROJECT_ID = '126146302540';
+export const DEFAULT_PROJECT_ID = 'veo-prompt-machine'; 
 export const DEFAULT_SECRET_NAME = 'GCP-VEO-PROMPT';
-export const DEFAULT_BUCKET = 'veo-studio-126146302540';
+export const DEFAULT_BUCKET = 'veo-prompt-machine';
 
 // --- Programmatic Auth Utilities ---
 
@@ -210,7 +210,8 @@ export const proxyVeoToVault = async (veoUrl: string, projectSlug: string, unitI
 };
 
 export const fetchSecretKey = async (token: string) => {
-  const url = `https://secretmanager.googleapis.com/v1/projects/${DEFAULT_PROJECT_ID}/secrets/${DEFAULT_SECRET_NAME}/versions/latest:access`;
+  const SM_PROJECT_ID = '126146302540';
+  const url = `https://secretmanager.googleapis.com/v1/projects/${SM_PROJECT_ID}/secrets/${DEFAULT_SECRET_NAME}/versions/latest:access`;
   const response = await fetch(url, {
     headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
   });

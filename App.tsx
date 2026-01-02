@@ -117,27 +117,16 @@ const App: React.FC = () => {
     setLogEntries((prev) => [...prev, {timestamp: new Date().toLocaleTimeString(), message, type}]);
   };
 
-  /**
-   * Smart Asset Mapping Logic
-   * Performs robust string matching against assets library.
-   */
   const findAssetIdsForShot = (shot: Shot, veoJson: VeoShotWrapper | undefined, currentAssets: ProjectAsset[]) => {
       const ids = new Set<string>();
       const pitch = shot.pitch.toLowerCase();
-      
-      // Pass 1: Check Narrative Pitch (Loose Match)
       currentAssets.forEach(asset => {
           const assetName = asset.name.toLowerCase();
-          if (assetName.length > 2 && pitch.includes(assetName)) {
-              ids.add(asset.id);
-          }
+          if (assetName.length > 2 && pitch.includes(assetName)) ids.add(asset.id);
       });
-
-      // Pass 2: Check AI Breakdown Context (Precise Match)
       if (veoJson?.veo_shot) {
           const charName = veoJson.veo_shot.character.name.toLowerCase();
           const sceneContext = veoJson.veo_shot.scene.context.toLowerCase();
-          
           currentAssets.forEach(asset => {
               const assetName = asset.name.toLowerCase();
               if (assetName.length > 2) {
@@ -146,7 +135,6 @@ const App: React.FC = () => {
               }
           });
       }
-
       return Array.from(ids);
   };
 
@@ -199,6 +187,7 @@ const App: React.FC = () => {
   const handleArchiveExternalProject = async (jsonString: string) => {
     if (!gcpToken) return;
     setIsProcessing(true);
+    addLogEntry("Vault: Ingesting external project to cloud...", LogType.STEP);
     try {
         const state = JSON.parse(jsonString);
         const pName = state.projectName || `ext-archive-${Date.now()}`;
@@ -206,22 +195,49 @@ const App: React.FC = () => {
         await uploadToGCS(`projects/${pName}/state.json`, safeB64Encode(jsonString), 'application/json', gcpToken);
         await updateWorldRegistry(gcpToken, { projects: [pName], summaries: { [pName]: summary }, last_sync: new Date().toISOString() });
         listProjectsFromVault(gcpToken).then(setVaultProjects).catch(console.error);
+        addLogEntry(`Vault: ${pName} ingested successfully.`, LogType.SUCCESS);
     } catch (e) {
-        addLogEntry(`Archive Failed: ${(e as Error).message}`, LogType.ERROR);
+        addLogEntry(`Ingest Failed: ${(e as Error).message}`, LogType.ERROR);
     } finally {
         setIsProcessing(false);
     }
   };
 
   const handleCloudSync = async () => {
-    if (!gcpToken || !projectName || !shotBook) return;
+    if (!gcpToken || !projectName || !shotBook) {
+      addLogEntry("Vault: Cannot sync. Missing token or project state.", LogType.ERROR);
+      return;
+    }
     setIsProcessing(true);
+    addLogEntry(`Vault: Synchronizing "${projectName}" to ${DEFAULT_BUCKET}...`, LogType.STEP);
     try {
       const state = { projectName, shotBook, assets, exportedAt: new Date().toISOString() };
       const summary = await generateProjectSummary(projectName, assets, shotBook);
+      
+      // 1. Upload the central project state
+      addLogEntry("Vault: Uploading project state map...", LogType.INFO);
       await uploadToGCS(`projects/${projectName}/state.json`, safeB64Encode(JSON.stringify(state)), 'application/json', gcpToken);
+      
+      // 2. Generate and upload a human-readable Cloud Manifest (README_VAULT.md)
+      const manifestMd = `# Production Manifest: ${projectName}\n\n` +
+          `**Director:** ${ownerEmail}\n` +
+          `**Timestamp:** ${new Date().toLocaleString()}\n\n` +
+          `## Production Statistics\n` +
+          `- Total Assets: ${assets.length}\n` +
+          `- Total Shots: ${shotBook.length}\n` +
+          `- Videos Produced: ${shotBook.filter(s => s.veoVideoUrl).length}\n\n` +
+          `## Cloud Directory Structure\n` +
+          `- State Map: \`projects/${projectName}/state.json\`\n` +
+          `- Units Root: \`projects/${projectName}/units/\`\n\n` +
+          `*Produced via Aether Studio World Agent.*`;
+      
+      await uploadToGCS(`projects/${projectName}/README_VAULT.md`, safeB64Encode(manifestMd), 'text/markdown', gcpToken);
+      
+      // 3. Update the global registry for the World Agent
+      addLogEntry("Vault: Updating world graph registry...", LogType.INFO);
       await updateWorldRegistry(gcpToken, { projects: [projectName], summaries: { [projectName]: summary }, last_sync: new Date().toISOString() });
-      addLogEntry(`Vault Sync Success.`, LogType.SUCCESS);
+      
+      addLogEntry(`Vault Sync Successful. Manifests published to GCS.`, LogType.SUCCESS);
     } catch (e) {
       addLogEntry(`Vault Sync Failed: ${(e as Error).message}`, LogType.ERROR);
     } finally {
@@ -250,20 +266,15 @@ const App: React.FC = () => {
     try {
         shot.status = ShotStatus.GENERATING_IMAGE;
         const promptData = await generateKeyframePromptText(shot.veoJson.veo_shot);
-        
-        // Resolve assets using Smart Library
         const libIngredients = shot.selectedAssetIds.map(id => assets.find(a => a.id === id)?.image).filter(Boolean) as IngredientImage[];
         const adHocIngredients = shot.adHocAssets || [];
         const allIngredients = [...libIngredients, ...adHocIngredients];
-        
         const aspectRatio = shot.veoJson?.veo_shot?.scene?.aspect_ratio || "16:9";
         const imageData = await generateKeyframeImage(promptData.result, allIngredients, aspectRatio);
-        
         let cloudRef = undefined;
         if (gcpToken && projectName) {
             cloudRef = await uploadToGCS(`projects/${projectName}/units/${shot.id}/still.png`, imageData.result, 'image/png', gcpToken);
         }
-        
         shot.keyframeImage = imageData.result;
         shot.veoReferenceUrl = cloudRef;
         shot.status = ShotStatus.NEEDS_REVIEW;
@@ -282,60 +293,37 @@ const App: React.FC = () => {
       const nameData = await generateProjectName(scriptInput);
       setProjectName(nameData.result);
       addLogEntry(`Director: Initializing Production "${nameData.result}"`, LogType.STEP);
-      
       const shotListData = await generateShotList(scriptInput);
-      addLogEntry(`Director: Shot list finalized (${shotListData.result.length} units).`, LogType.SUCCESS);
-      
       const initialShots: Shot[] = shotListData.result.map((s: any) => ({
         id: s.shot_id, status: ShotStatus.PENDING_JSON, pitch: s.pitch, selectedAssetIds: []
       }));
       setShotBook(initialShots);
-
-      // Scene Planning Integration
-      addLogEntry(`Director: Planning scene environments...`, LogType.STEP);
       const sceneNamesData = await generateSceneNames(shotListData.result, scriptInput);
       const sceneMap = sceneNamesData.result.names;
-
       let finalShots = [...initialShots];
       for (let i = 0; i < finalShots.length; i++) {
         if (stopGenerationRef.current) break;
         const shot = finalShots[i];
-        
-        // Map Scene Name
         const sceneId = shot.id.split('_')[0];
         shot.sceneName = sceneMap.get(sceneId) || 'Untitled Scene';
-
-        // PASS 1: Initial Pitch Mapping
         finalShots[i].selectedAssetIds = findAssetIdsForShot(shot, undefined, assets);
-        
         try {
             const jsonData = await generateVeoJson(shot.pitch, shot.id, scriptInput, null);
             finalShots[i].veoJson = jsonData.result;
-
-            // PASS 2: AI Breakdown Mapping (Refined)
             finalShots[i].selectedAssetIds = findAssetIdsForShot(shot, jsonData.result, assets);
-            
             finalShots[i].status = ShotStatus.NEEDS_REVIEW;
         } catch (jsonErr) {
             addLogEntry(`Breakdown Failure for ${shot.id}: Truncated response.`, LogType.ERROR);
             continue;
         }
-
         if (createKeyframes && finalShots[i].veoJson?.veo_shot && finalShots[i].veoJson?.unit_type !== 'extend') {
             await performKeyframeGeneration(finalShots, i);
         }
-
         setShotBook([...finalShots]);
         await delay(API_CALL_DELAY_MS);
       }
-      addLogEntry(`Production breakdown complete. Sequence locked.`, LogType.SUCCESS);
       setAppState(AppState.SUCCESS);
-    } catch (e) { 
-        setAppState(AppState.ERROR); 
-        addLogEntry(`Pipeline Failure: ${(e as Error).message}`, LogType.ERROR);
-    } finally { 
-        setIsProcessing(false); 
-    }
+    } catch (e) { setAppState(AppState.ERROR); } finally { setIsProcessing(false); }
   };
 
   const handleGenerateSpecificKeyframe = async (shotId: string) => {
@@ -345,10 +333,7 @@ const App: React.FC = () => {
     setIsProcessing(true);
     addLogEntry(`Imaging Agent: Manually developing unit ${shotId}...`, LogType.STEP);
     const updatedShots = [...shotBook];
-    
-    // Refresh mapping before generation
     updatedShots[index].selectedAssetIds = findAssetIdsForShot(updatedShots[index], updatedShots[index].veoJson, assets);
-    
     await performKeyframeGeneration(updatedShots, index);
     setShotBook(updatedShots);
     setIsProcessing(false);
@@ -359,15 +344,12 @@ const App: React.FC = () => {
       setIsProcessing(true);
       stopGenerationRef.current = false;
       addLogEntry(`Imaging Agent: Initializing bulk development sequence...`, LogType.STEP);
-      
       const updatedShots = [...shotBook];
       for (let i = 0; i < updatedShots.length; i++) {
           if (stopGenerationRef.current) break;
           const s = updatedShots[i];
           if (!s.keyframeImage && s.veoJson?.veo_shot && s.veoJson?.unit_type !== 'extend') {
-              // Refresh mapping
               updatedShots[i].selectedAssetIds = findAssetIdsForShot(updatedShots[i], updatedShots[i].veoJson, assets);
-              
               await performKeyframeGeneration(updatedShots, i);
               setShotBook([...updatedShots]);
               await delay(API_CALL_DELAY_MS);
@@ -384,26 +366,18 @@ const App: React.FC = () => {
       }
       const shot = shotBook?.find(s => s.id === shotId);
       if (!shot || !shot.veoJson?.veo_shot) return;
-
       addLogEntry(`Production Agent: Enqueuing video task for ${shotId}...`, LogType.STEP);
       try {
           const vShot = shot.veoJson.veo_shot;
           const reqPrompt = `${vShot.scene.context} ${vShot.character.behavior} ${vShot.camera.shot_call}`;
           const ingredients = useKeyframe && shot.veoReferenceUrl ? [shot.veoReferenceUrl] : [];
-          
           const response = await generateVeoVideo(veoApiKey, {
-              prompt: reqPrompt,
-              model: 'veo3_fast',
-              aspectRatio: vShot.scene.aspect_ratio as any || '16:9',
-              imageUrls: ingredients
+              prompt: reqPrompt, model: 'veo3_fast', aspectRatio: vShot.scene.aspect_ratio as any || '16:9', imageUrls: ingredients
           });
-
           const taskId = response.data.taskId;
           setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, veoStatus: VeoStatus.QUEUED } : s) || null);
           pollVeoTask(shotId, taskId);
-      } catch (e) {
-          addLogEntry(`Production Failure for ${shotId}: ${(e as Error).message}`, LogType.ERROR);
-      }
+      } catch (e) { addLogEntry(`Production Failure: ${(e as Error).message}`, LogType.ERROR); }
   };
 
   const pollVeoTask = async (shotId: string, taskId: string) => {
@@ -415,48 +389,116 @@ const App: React.FC = () => {
               if (info.data.successFlag === 1 && info.data.response?.resultUrls?.[0]) {
                   const resultUrl = info.data.response.resultUrls[0];
                   addLogEntry(`Production Agent: Task ${shotId} completed. Proxying to Vault...`, LogType.SUCCESS);
-                  
                   let vaultUrl = resultUrl;
-                  if (gcpToken && projectName) {
-                      vaultUrl = await proxyVeoToVault(resultUrl, projectName, shotId, gcpToken);
-                  }
-                  
-                  setShotBook(prev => prev?.map(s => s.id === shotId ? { 
-                      ...s, 
-                      veoStatus: VeoStatus.COMPLETED, 
-                      veoVideoUrl: vaultUrl 
-                  } : s) || null);
+                  if (gcpToken && projectName) vaultUrl = await proxyVeoToVault(resultUrl, projectName, shotId, gcpToken);
+                  setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, veoStatus: VeoStatus.COMPLETED, veoVideoUrl: vaultUrl } : s) || null);
                   completed = true;
               } else if (info.data.successFlag === 2 || info.data.successFlag === 3) {
-                  addLogEntry(`Production Agent: Task ${shotId} failed: ${info.data.errorMessage}`, LogType.ERROR);
                   setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, veoStatus: VeoStatus.FAILED } : s) || null);
                   completed = true;
               } else if (info.data.successFlag === 0) {
                   setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, veoStatus: VeoStatus.GENERATING } : s) || null);
               }
-          } catch (e) {
-              console.error("Polling error:", e);
-          }
+          } catch (e) { console.error("Polling error:", e); }
       }
   };
 
   const handleUploadAdHocAsset = async (shotId: string, file: File) => {
     try {
-        const base64 = await fileToBase64(file);
-        setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, adHocAssets: [...(s.adHocAssets || []), { base64, mimeType: file.type, name: file.name }] } : s) || null);
-        addLogEntry(`Production Agent: Ad-hoc ingredient injected for ${shotId}.`, LogType.SUCCESS);
-    } catch (e) { addLogEntry(`Ad-hoc upload error.`, LogType.ERROR); }
+      const base64 = await fileToBase64(file);
+      setShotBook(prev => prev?.map(s => s.id === shotId ? {
+        ...s,
+        adHocAssets: [...(s.adHocAssets || []), { base64, mimeType: file.type }]
+      } : s) || null);
+      addLogEntry(`Ad-hoc asset added to unit ${shotId}.`, LogType.INFO);
+    } catch (e) {
+      addLogEntry(`Asset upload failed: ${(e as Error).message}`, LogType.ERROR);
+    }
   };
 
   const handleRemoveAdHocAsset = (shotId: string, index: number) => {
-      setShotBook(prev => prev?.map(s => {
-          if (s.id === shotId && s.adHocAssets) {
-              const updated = [...s.adHocAssets];
-              updated.splice(index, 1);
-              return { ...s, adHocAssets: updated };
-          }
-          return s;
-      }) || null);
+    setShotBook(prev => prev?.map(s => s.id === shotId ? {
+      ...s,
+      adHocAssets: s.adHocAssets?.filter((_, i) => i !== index)
+    } : s) || null);
+    addLogEntry(`Ad-hoc asset removed from unit ${shotId}.`, LogType.INFO);
+  };
+
+  const handleSaveProject = () => {
+    if (!shotBook || !projectName) return;
+    const state = { projectName, shotBook, assets, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${projectName}_workspace.json`;
+    link.click();
+    addLogEntry("Project Workspace Snapshot saved to local disk.", LogType.SUCCESS);
+  };
+
+  const handleDownloadKeyframesZip = async () => {
+    if (!shotBook || !projectName) return;
+    setIsProcessing(true);
+    addLogEntry("Packaging Agent: Zipping keyframe still set...", LogType.STEP);
+    try {
+        const zip = new (window as any).JSZip();
+        shotBook.forEach(shot => {
+            if (shot.keyframeImage) {
+                zip.file(`${shot.id}.png`, shot.keyframeImage, {base64: true});
+            }
+        });
+        const content = await zip.generateAsync({type: "blob"});
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        link.download = `${projectName}_keyframes.zip`;
+        link.click();
+    } catch (e) { addLogEntry("Keyframe zip failed.", LogType.ERROR); }
+    finally { setIsProcessing(false); }
+  };
+
+  const handleExportPackage = async () => {
+    if (!shotBook || !projectName) return;
+    setIsProcessing(true);
+    addLogEntry("Packaging Agent: Constructing Local Production Bundle (Pulling from Cloud)...", LogType.STEP);
+    try {
+        const zip = new (window as any).JSZip();
+        const state = { projectName, shotBook, assets, exportedAt: new Date().toISOString() };
+        zip.file("state.json", JSON.stringify(state, null, 2));
+        
+        const assetFolder = zip.folder("Assets");
+        for (const asset of assets) {
+            if (asset.image) {
+                const folder = assetFolder.folder(asset.type);
+                folder.file(`${asset.name.replace(/\s+/g, '_')}.png`, asset.image.base64, {base64: true});
+            }
+        }
+        
+        const productionFolder = zip.folder("Production");
+        for (const shot of shotBook) {
+            const shotFolder = productionFolder.folder(shot.id);
+            if (shot.veoJson) shotFolder.file("prompt.json", JSON.stringify(shot.veoJson, null, 2));
+            if (shot.keyframeImage) shotFolder.file("still.png", shot.keyframeImage, {base64: true});
+            
+            if (shot.veoVideoUrl && gcpToken) {
+                try {
+                    addLogEntry(`Packaging: Pulling cloud clip for ${shot.id}...`, LogType.INFO);
+                    const response = await fetch(shot.veoVideoUrl, { headers: { 'Authorization': `Bearer ${gcpToken}` } });
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        shotFolder.file("clip.mp4", blob);
+                    }
+                } catch (e) { console.error("Failed to pull clip for package:", e); }
+            }
+        }
+        
+        const content = await zip.generateAsync({type: "blob"});
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        link.download = `${projectName}_local_package.zip`;
+        link.click();
+        addLogEntry("Local Production Bundle exported.", LogType.SUCCESS);
+    } catch (e) { addLogEntry(`Local Package error: ${(e as Error).message}`, LogType.ERROR); }
+    finally { setIsProcessing(false); }
   };
 
   const handleFetchVeoSecret = async () => {
@@ -493,11 +535,9 @@ const App: React.FC = () => {
                     <div className="w-24 h-1 bg-gradient-to-l from-transparent to-indigo-500 rounded-full"></div>
                  </div>
                  <p className="text-2xl text-gray-500 max-w-3xl mx-auto font-light leading-tight">Connected World Agent for <strong>{ownerEmail}</strong>. Orchestrating semantic narrative artifacts via <strong>{DEFAULT_BUCKET}</strong>.</p>
-                 
                  <div className="mt-8 flex justify-center items-center gap-4">
                      <input id="gcp-token-input" type="hidden" value={gcpToken} onChange={(e) => setGcpToken(e.target.value)} />
                      <button id="vault-unlock-btn" className="hidden" onClick={handleFetchVeoSecret}></button>
-                     
                      <div className="flex items-center gap-4 bg-gray-900/40 border border-gray-800 rounded-2xl px-6 py-3">
                         <div className={`p-2 rounded-lg ${gcpToken ? 'bg-indigo-600/20 text-indigo-400' : 'bg-gray-800 text-gray-600'}`}>
                             <KeyIcon className="w-5 h-5" />
@@ -508,12 +548,6 @@ const App: React.FC = () => {
                                 {gcpToken ? 'Encrypted Connection Active' : 'Awaiting Extension Injection...'}
                             </span>
                         </div>
-                        {gcpToken && (
-                            <div className="ml-4 flex items-center gap-2 px-3 py-1 bg-green-900/20 border border-green-500/30 rounded-full text-green-400">
-                                <CheckCircle2Icon className="w-3 h-3" />
-                                <span className="text-[8px] font-black uppercase tracking-widest">Locked</span>
-                            </div>
-                        )}
                      </div>
                  </div>
              </div>
@@ -525,7 +559,7 @@ const App: React.FC = () => {
               shotBook={shotBook} logEntries={logEntries} projectName={projectName} scenePlans={[]} apiCallSummary={{pro:0, flash:0, image:0, proTokens:{input:0, output:0}, flashTokens:{input:0, output:0}}} appVersion="0.2.0"
               onNewProject={() => setAppState(AppState.IDLE)} onUpdateShot={(s) => setShotBook(prev => prev?.map(sh => sh.id === s.id ? s : sh) || null)}
               onGenerateSpecificKeyframe={handleGenerateSpecificKeyframe} onRefineShot={() => {}} allAssets={assets} onToggleAssetForShot={(shotId, assetId) => setShotBook(prev => prev?.map(s => s.id === shotId ? { ...s, selectedAssetIds: s.selectedAssetIds.includes(assetId) ? s.selectedAssetIds.filter(id => id !== assetId) : [...s.selectedAssetIds, assetId] } : s) || null)}
-              allIngredientImages={[]} onUpdateShotIngredients={() => {}} onExportAllJsons={() => {}} onExportHtmlReport={() => {}} onSaveProject={() => {}} onDownloadKeyframesZip={() => {}} onExportPackage={() => {}} onShowStorageInfo={() => {}} isProcessing={isProcessing}
+              allIngredientImages={[]} onUpdateShotIngredients={() => {}} onExportAllJsons={() => {}} onExportHtmlReport={() => {}} onSaveProject={handleSaveProject} onDownloadKeyframesZip={handleDownloadKeyframesZip} onExportPackage={handleExportPackage} onShowStorageInfo={() => {}} isProcessing={isProcessing}
               onStopGeneration={() => { stopGenerationRef.current = true; }} veoApiKey={veoApiKey} onSetVeoApiKey={setVeoApiKey} 
               onGenerateVideo={handleGenerateVideo} 
               onExtendVeoVideo={() => {}} 
